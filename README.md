@@ -2,23 +2,21 @@
 
 A lightweight webhook debugging service built with Python and FastAPI.
 
-The project is designed around common integration problems seen in production systems: signature validation, duplicate delivery, idempotency, event inspection, and retry behavior.
-
-## Why this project exists
-
-Webhook problems are often difficult to diagnose because the failure can happen anywhere between the sender, network, receiver, and downstream processing.
-
-This project provides a small local service that makes those behaviors visible and testable.
+The project is based on production integration problems I regularly investigate: validating webhook signatures, tracing requests across services, spotting duplicate deliveries, and separating transport failures from application-level failures.
 
 ## Features
 
 - HMAC-SHA256 webhook signature verification
-- Duplicate event detection using an event ID
-- In-memory event inspection
-- Health-check endpoint
-- Retry helper with exponential backoff
+- Idempotent event ingestion using `X-Event-ID`
+- Duplicate-delivery counters
+- Correlation IDs propagated through responses and stored event metadata
+- Structured JSON request logs with status code and latency
+- Event listing and per-event inspection
+- Delivery statistics endpoint
+- Exponential retry helper
 - Docker support
-- Automated tests
+- Ruff linting + pytest
+- GitHub Actions quality checks
 - Environment-based secret configuration
 
 ## API
@@ -35,6 +33,7 @@ GET /health
 POST /webhooks
 X-Event-ID: evt_123
 X-Webhook-Signature: <hex hmac sha256>
+X-Correlation-ID: checkout-req-917
 Content-Type: application/json
 ```
 
@@ -51,17 +50,52 @@ Example payload:
 }
 ```
 
-### Inspect a stored event
+Successful response:
+
+```json
+{
+  "status": "accepted",
+  "duplicate": false,
+  "event_id": "evt_123",
+  "correlation_id": "checkout-req-917"
+}
+```
+
+A repeated `X-Event-ID` is accepted safely but marked as a duplicate instead of being stored as a second event.
+
+### List recent events
+
+```http
+GET /events?limit=20
+```
+
+### Inspect one event
 
 ```http
 GET /events/evt_123
 ```
 
+Stored metadata includes the first and most recent delivery timestamps, duplicate count, correlation ID and payload size.
+
+### Delivery stats
+
+```http
+GET /stats
+```
+
+Example:
+
+```json
+{
+  "unique_events": 12,
+  "duplicate_deliveries": 3,
+  "total_deliveries": 15
+}
+```
+
 ## Signature format
 
-The signature is an HMAC-SHA256 hex digest calculated over the raw request body.
-
-Python example:
+The signature is an HMAC-SHA256 hex digest calculated over the exact raw request body.
 
 ```python
 import hashlib
@@ -72,6 +106,20 @@ signature = hmac.new(
     raw_body,
     hashlib.sha256,
 ).hexdigest()
+```
+
+Using the raw body matters because parsing and re-serializing JSON can change whitespace or key formatting and therefore produce a different digest.
+
+## Correlation IDs and logs
+
+Clients may provide `X-Correlation-ID`. Valid IDs are echoed in the response and attached to stored event metadata. If the header is missing or malformed, the service generates a UUID.
+
+Application logs are emitted as JSON so they are easy to search or ingest into a log platform.
+
+Example:
+
+```json
+{"level":"INFO","message":"request_completed","correlation_id":"checkout-req-917","method":"POST","path":"/webhooks","status_code":202,"duration_ms":1.42}
 ```
 
 ## Run locally
@@ -85,17 +133,17 @@ python -m venv .venv
 # macOS/Linux
 source .venv/bin/activate
 
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-The API will be available at:
+API:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Interactive FastAPI documentation:
+Interactive docs:
 
 ```text
 http://127.0.0.1:8000/docs
@@ -103,26 +151,26 @@ http://127.0.0.1:8000/docs
 
 ## Environment
 
-Copy the example file:
+Copy the example file and set a secret:
 
 ```bash
 cp .env.example .env
 ```
 
-Then set:
-
 ```text
 WEBHOOK_SECRET=your-secret
 ```
 
-If the variable is not set, the development default is `dev-secret`.
+The development fallback is `dev-secret`. A real deployment should always supply its own secret.
 
-## Run tests
+## Quality checks
 
 ```bash
-pip install -r requirements-dev.txt
+ruff check app tests
 pytest
 ```
+
+The same checks run in GitHub Actions on pushes to `main` and on pull requests.
 
 ## Docker
 
@@ -131,18 +179,19 @@ docker build -t webhook-inspector .
 docker run --rm -p 8000:8000 -e WEBHOOK_SECRET=your-secret webhook-inspector
 ```
 
-## Design notes
+## Design decisions
 
-The event store is intentionally in-memory so the repository stays focused on webhook behavior rather than persistence. A production version would typically replace it with Redis or a database and add authentication, structured logging, tracing, rate limiting, and durable retry queues.
+The event store is intentionally in-memory. The first goal of the project is to make webhook transport behavior visible without hiding it behind database setup.
 
-## Roadmap
+For production use I would replace the in-memory store with Redis or a durable database, move secrets to a secret manager, and add authentication, rate limiting, persistent retry queues, and tracing.
 
-- Persistent event storage
-- Web UI for inspecting events
+## Next ideas
+
+- Persistent storage
+- Replay to a configured safe target
+- Latency percentiles
 - Configurable signature schemes
-- Outbound webhook replay
-- Latency metrics
-- Request/response correlation IDs
+- Small event-inspection UI
 
 ## License
 

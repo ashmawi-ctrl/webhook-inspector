@@ -1,5 +1,7 @@
 # Webhook Inspector
 
+[![quality](https://github.com/ashmawi-ctrl/webhook-inspector/actions/workflows/tests.yml/badge.svg)](https://github.com/ashmawi-ctrl/webhook-inspector/actions/workflows/tests.yml)
+
 A lightweight webhook debugging service built with Python and FastAPI.
 
 The project is based on production integration problems I regularly investigate: validating webhook signatures, tracing requests across services, spotting duplicate deliveries, and separating transport failures from application-level failures.
